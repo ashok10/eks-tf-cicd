@@ -4,33 +4,69 @@ on:
   push:
     branches:
       - master
+  workflow_dispatch:
 
 jobs:
   terraform:
     runs-on: ubuntu-latest
-
+    
     steps:
-      - name: Checkout repo
+      - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-
+  
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ap-south-1
-      
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.6
+          
       - name: Clean old state
         run: rm -rf .terraform terraform.tfstate terraform.tfstate.backup || true
-
+   
       - name: Terraform Init
-        run: terraform init
+        run: terraform init -backend-config="bucket=my-terraform-state-bucket-eks5b2" -backend-config="key=eks/terraform.tfstate" -backend-config="region=ap-south-1"
 
+      # -----------------------
+      # Import Pre-existing AWS Resources (if they exist)
+      # -----------------------
+      - name: Import Existing KMS Alias
+        run: |
+          set +e
+          aws kms describe-alias --alias-name alias/eks/demo-eks-cluster --region ap-south-1 > /dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            echo "KMS alias exists — importing into Terraform..."
+            terraform import 'module.eks.module.kms.aws_kms_alias.this["cluster"]' arn:aws:kms:ap-south-1:<ACCOUNT_ID>:alias/eks/demo-eks-cluster || true
+          else
+            echo "KMS alias does not exist — skipping import."
+          fi
+          set -e
+
+      - name: Import Existing CloudWatch Log Group
+        run: |
+          set +e
+          aws logs describe-log-groups --log-group-name-prefix /aws/eks/demo-eks-cluster/cluster --region ap-south-1 | grep /aws/eks/demo-eks-cluster/cluster
+          if [ $? -eq 0 ]; then
+            echo "CloudWatch log group exists — importing..."
+            terraform import 'module.eks.aws_cloudwatch_log_group.this[0]' /aws/eks/demo-eks-cluster/cluster || true
+          else
+            echo "No existing log group — skipping import."
+          fi
+          set -e
+
+      # -----------------------
+      # Terraform Plan
+      # -----------------------
       - name: Terraform Plan
-        run: terraform plan
+        run: terraform plan -input=false
 
+      # -----------------------
+      # Terraform Apply
+      # -----------------------
       - name: Terraform Apply
-        run: terraform apply -auto-approve
+        run: terraform apply -auto-approve -input=false
