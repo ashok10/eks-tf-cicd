@@ -1,4 +1,4 @@
-5b2terraform {
+terraform {
   backend "s3" {
     bucket         = "my-terraform-state-bucket-eks5b2"
     key            = "eks/terraform.tfstate"
